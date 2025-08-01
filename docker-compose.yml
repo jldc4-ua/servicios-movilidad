@@ -1,0 +1,69 @@
+services:
+
+  ### 1. OpenRouteService #############################################
+  ors-app:
+    image: ${ORS_IMAGE}
+    container_name: ors
+    restart: unless-stopped
+    environment:
+      - "JAVA_OPTS=-Xms${ORS_MEMORY} -Xmx${ORS_MEMORY}"
+      - "ORS_THREADS=${ORS_THREADS}"
+    volumes:
+      - ${DATA_DIR}/ors/graphs:/ors/graphs
+      - ./ors/app.config.sample.json:/ors/config/app.config
+    ports:
+      - "${ORS_HTTP_PORT}:8080"
+    command: >
+      bash -c "
+        if [ ! -f /ors/graphs/graph_completed ]; then
+          wget -O /tmp/region.pbf ${ORS_PBF_URL} &&
+          ./ors-app import -c /ors/config/app.config /tmp/region.pbf &&
+          touch /ors/graphs/graph_completed
+        fi &&
+        ./ors-app start -c /ors/config/app.config
+      "
+
+  ### 2. Elasticsearch para Pelias ###################################
+  pelias-elastic:
+    image: ${PELIASELASTIC_IMAGE}
+    container_name: pelias-elastic
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - http.port=${PELIASELASTIC_PORT}
+      - ES_JAVA_OPTS=-Xms4g -Xmx4g
+    volumes:
+      - ${DATA_DIR}/pelias/esdata:/usr/share/elasticsearch/data
+    ports:
+      - "${PELIASELASTIC_PORT}:9200"
+
+  ### 3. API de Pelias ################################################
+  pelias-api:
+    image: ${PELIAS_API_IMAGE}
+    container_name: pelias-api
+    restart: unless-stopped
+    depends_on:
+      - pelias-elastic
+    environment:
+      - "PELIAS_CONFIG=/pelias.json"
+    volumes:
+      - ./pelias/pelias.json:/pelias.json
+    ports:
+      - "${PELIAS_API_PORT}:4000"
+    command: ["npm", "start"]
+
+  ### 4. Pelias importer (run-once) ###################################
+  pelias-import:
+    image: pelias/importer:latest
+    profiles: ["builder"]        # se ejecuta solo con --profile builder
+    container_name: pelias-import
+    depends_on:
+      - pelias-elastic
+    volumes:
+      - ${DATA_DIR}/pelias:/data
+      - ./pelias/pelias.json:/pelias.json
+    command: ["pelias", "import", "all"]
+
+networks:
+  default:
+    name: geo-stack
